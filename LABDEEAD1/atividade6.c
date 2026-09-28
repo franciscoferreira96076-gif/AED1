@@ -6,14 +6,23 @@
  * disco, de duas formas diferentes:
  *
  *   1) Arquivo de TEXTO ("placar.txt"): guarda um histórico legível
- *      por humanos com nome e pontuação de cada partida.
+ *      por humanos com a pontuação de cada partida, uma por linha,
+ *      escrito em modo "a" (anexar) com fprintf/fscanf.
  *
  *   2) Arquivo BINÁRIO ("save.bin"): guarda o estado completo do
- *      jogo (todas as entidades, byte a byte) com fwrite/fread.
+ *      jogo (todas as entidades, byte a byte) com fwrite/fread em
+ *      modo "wb"/"rb", permitindo continuar a partida de onde parou.
  *
- * Exercícios adicionados:
- *   - Exercício 1: salvar nome + pontuação no placar.txt.
- *   - Exercício 2: apagar save.bin usando a tecla DELETE.
+ * Conceitos praticados:
+ *   - fopen / fclose e tratamento de erro (fopen retornando NULL)
+ *   - modo texto ("a", "r") x modo binário ("wb", "rb")
+ *   - fprintf / fscanf para dados legíveis (placar)
+ *   - fwrite / fread para dados binários (save/load do jogo)
+ *   - reaproveita ponteiros, alocação dinâmica, struct, enum e union
+ *     da atividade5 (Entidade, TipoEntidade, ExtraEntidade)
+ *
+ * Compilar (Linux, com raylib instalada):
+ *   gcc atividade6.c -o atividade6 -lraylib -lm -lpthread -ldl -lrt -lX11
  */
 
 #include "raylib.h"
@@ -21,6 +30,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
+#include <string.h>
 
 #define LARGURA_JANELA  800
 #define ALTURA_JANELA   600
@@ -58,433 +68,224 @@ Entidade *criarEntidade(TipoEntidade tipo, Vector2 pos) {
     Entidade *e = (Entidade *)malloc(sizeof(Entidade));
     if (e == NULL) return NULL;
 
-    e->tipo = tipo;
-    e->pos = pos;
-    e->raio = (tipo == ENTIDADE_JOGADOR) ? RAIO_JOGADOR
+    e->tipo  = tipo;
+    e->pos   = pos;
+    e->raio  = (tipo == ENTIDADE_JOGADOR) ? RAIO_JOGADOR
              : (tipo == ENTIDADE_INIMIGO) ? 15.0f : 8.0f;
 
     switch (tipo) {
         case ENTIDADE_JOGADOR:
             e->vida = 100;
-            e->cor = BLUE;
+            e->cor  = BLUE;
             break;
-
         case ENTIDADE_INIMIGO:
-            e->vida = 40;
-            e->cor = MAROON;
+            e->vida       = 40;
+            e->cor        = MAROON;
             e->extra.dano = GetRandomValue(5, 15);
             break;
-
         case ENTIDADE_ITEM:
-            e->vida = 1;
-            e->cor = GOLD;
+            e->vida        = 1;
+            e->cor         = GOLD;
             e->extra.valor = GetRandomValue(5, 20);
             break;
     }
-
     return e;
 }
 
 void adicionarEntidade(Entidade *e) {
     if (e == NULL || totalEntidades >= MAX_ENTIDADES) return;
-
     vetorEntidades[totalEntidades] = e;
     totalEntidades++;
 }
 
 void removerEntidade(int indice) {
     if (indice < 0 || indice >= totalEntidades) return;
-
     free(vetorEntidades[indice]);
-
     vetorEntidades[indice] = vetorEntidades[totalEntidades - 1];
     totalEntidades--;
 }
 
 void liberarTodasEntidades(void) {
-    for (int i = 0; i < totalEntidades; i++) {
-        free(vetorEntidades[i]);
-    }
-
+    for (int i = 0; i < totalEntidades; i++) free(vetorEntidades[i]);
     totalEntidades = 0;
 }
 
 bool colidiu(Entidade *a, Entidade *b) {
     float dx = a->pos.x - b->pos.x;
     float dy = a->pos.y - b->pos.y;
-
     float distancia = sqrtf(dx * dx + dy * dy);
-
     return distancia <= (a->raio + b->raio);
 }
 
 void desenharEntidade(Entidade *e) {
     DrawCircleV(e->pos, e->raio, e->cor);
-
     if (e->tipo == ENTIDADE_INIMIGO) {
-        DrawText(
-            TextFormat("%d", e->vida),
-            e->pos.x - 8,
-            e->pos.y - 26,
-            14,
-            BLACK
-        );
+        DrawText(TextFormat("%d", e->vida), e->pos.x - 8, e->pos.y - 26, 14, BLACK);
     }
 }
 
-/* ---------------------------------------------------------------
- * ARQUIVO DE TEXTO
- * Exercício 1:
- * Salva o nome do jogador junto com a pontuação.
- * --------------------------------------------------------------- */
-void salvarPlacarTexto(const char *nomeJogador, int pontuacao) {
-    FILE *arquivo = fopen(ARQUIVO_PLACAR, "a");
-
+/* ---- arquivo de TEXTO: histórico de pontuação (fprintf/fscanf) ---- */
+// Exercício 1: Alterado para receber e salvar o nome do jogador[cite: 1]
+void salvarPlacarTexto(int pontuacao, const char *nomeJogador) {
+    FILE *arquivo = fopen(ARQUIVO_PLACAR, "a"); // "a": anexa ao final, modo texto
     if (arquivo == NULL) return;
 
-    fprintf(arquivo, "%s %d\n", nomeJogador, pontuacao);
-
+    fprintf(arquivo, "%s %d\n", nomeJogador, pontuacao); //[cite: 1]
     fclose(arquivo);
 }
 
-/* ---------------------------------------------------------------
- * Lê todas as pontuações do arquivo e devolve a maior encontrada.
- * Agora o arquivo possui:
- *
- * nome pontuação
- *
- * --------------------------------------------------------------- */
+/* lê todas as pontuações do arquivo de texto e devolve a maior encontrada */
 int lerMelhorPontuacao(void) {
-    FILE *arquivo = fopen(ARQUIVO_PLACAR, "r");
-
+    FILE *arquivo = fopen(ARQUIVO_PLACAR, "r"); // "r": leitura, modo texto
     if (arquivo == NULL) return 0;
 
-    int melhor = 0;
-    int valor = 0;
-    char nomeLido[16];
-
-    while (fscanf(arquivo, "%15s %d", nomeLido, &valor) == 2) {
-        if (valor > melhor) {
-            melhor = valor;
-        }
+    int melhor = 0, valor = 0;
+    char nomeLido[16]; //[cite: 1]
+    
+    // Exercício 1: Lê os valores em pares de string e inteiro[cite: 1]
+    while (fscanf(arquivo, "%15s %d", nomeLido, &valor) == 2) { 
+        if (valor > melhor) melhor = valor;
     }
-
     fclose(arquivo);
-
     return melhor;
 }
 
-/* ---------------------------------------------------------------
- * ARQUIVO BINÁRIO: estado completo do jogo
- * --------------------------------------------------------------- */
+/* ---- arquivo BINÁRIO: estado completo do jogo (fwrite/fread) ---- */
 bool salvarJogoBinario(void) {
-    FILE *arquivo = fopen(ARQUIVO_SAVE, "wb");
-
+    FILE *arquivo = fopen(ARQUIVO_SAVE, "wb"); // "wb": escrita, modo binário
     if (arquivo == NULL) return false;
 
     fwrite(&totalEntidades, sizeof(int), 1, arquivo);
-
     for (int i = 0; i < totalEntidades; i++) {
-        fwrite(
-            vetorEntidades[i],
-            sizeof(Entidade),
-            1,
-            arquivo
-        );
+        fwrite(vetorEntidades[i], sizeof(Entidade), 1, arquivo); // grava a struct inteira, byte a byte
     }
 
     fclose(arquivo);
-
     return true;
 }
 
-/* ---------------------------------------------------------------
- * Carrega o jogo salvo do arquivo binário.
- * --------------------------------------------------------------- */
+/* recria o vetor de ponteiros a partir dos bytes gravados no arquivo binário */
 bool carregarJogoBinario(void) {
-    FILE *arquivo = fopen(ARQUIVO_SAVE, "rb");
-
+    FILE *arquivo = fopen(ARQUIVO_SAVE, "rb"); // "rb": leitura, modo binário
     if (arquivo == NULL) return false;
 
     int totalSalvo = 0;
-
     if (fread(&totalSalvo, sizeof(int), 1, arquivo) != 1) {
         fclose(arquivo);
         return false;
     }
 
     liberarTodasEntidades();
-
     for (int i = 0; i < totalSalvo; i++) {
-
         Entidade *e = (Entidade *)malloc(sizeof(Entidade));
-
-        if (e == NULL) {
-            fclose(arquivo);
-            return false;
-        }
-
         if (fread(e, sizeof(Entidade), 1, arquivo) != 1) {
             free(e);
             break;
         }
-
         adicionarEntidade(e);
     }
 
     fclose(arquivo);
-
     return true;
 }
 
-/* ---------------------------------------------------------------
- * Exercício 2:
- * Apaga o arquivo save.bin.
- *
- * remove() retorna 0 quando consegue apagar o arquivo.
- * Caso contrário, significa que o arquivo não foi encontrado
- * ou não pôde ser removido.
- * --------------------------------------------------------------- */
-bool apagarJogoSalvo(void) {
-    return remove(ARQUIVO_SAVE) == 0;
-}
-
 int main(void) {
-
     srand((unsigned int)time(NULL));
 
-    InitWindow(
-        LARGURA_JANELA,
-        ALTURA_JANELA,
-        "Atividade 6 - Manipulacao de Arquivos"
-    );
-
+    InitWindow(LARGURA_JANELA, ALTURA_JANELA, "Atividade 6 - Manipulacao de Arquivos (texto e binario)");
     SetTargetFPS(60);
+    
+    // Exercício 1: Variável para armazenar o nome do jogador[cite: 1]
+    char nomeJogador[16] = "Jogador1"; 
 
-    /* -----------------------------------------------------------
-     * EXERCÍCIO 1:
-     * Nome do jogador.
-     * ----------------------------------------------------------- */
-    char nomeJogador[16] = "";
-
-    printf("Digite o nome do jogador: ");
-    scanf("%15s", nomeJogador);
-
-    Entidade *jogador = criarEntidade(
-        ENTIDADE_JOGADOR,
-        (Vector2){
-            LARGURA_JANELA / 2.0f,
-            ALTURA_JANELA / 2.0f
-        }
-    );
-
+    Entidade *jogador = criarEntidade(ENTIDADE_JOGADOR,
+                                      (Vector2){ LARGURA_JANELA / 2.0f, ALTURA_JANELA / 2.0f });
     adicionarEntidade(jogador);
 
     for (int i = 0; i < TOTAL_INIMIGOS; i++) {
-
-        Vector2 pos = {
-            GetRandomValue(30, LARGURA_JANELA - 30),
-            GetRandomValue(30, ALTURA_JANELA - 30)
-        };
-
-        adicionarEntidade(
-            criarEntidade(ENTIDADE_INIMIGO, pos)
-        );
+        Vector2 pos = { GetRandomValue(30, LARGURA_JANELA - 30), GetRandomValue(30, ALTURA_JANELA - 30) };
+        adicionarEntidade(criarEntidade(ENTIDADE_INIMIGO, pos));
     }
-
     for (int i = 0; i < TOTAL_ITENS; i++) {
-
-        Vector2 pos = {
-            GetRandomValue(30, LARGURA_JANELA - 30),
-            GetRandomValue(30, ALTURA_JANELA - 30)
-        };
-
-        adicionarEntidade(
-            criarEntidade(ENTIDADE_ITEM, pos)
-        );
+        Vector2 pos = { GetRandomValue(30, LARGURA_JANELA - 30), GetRandomValue(30, ALTURA_JANELA - 30) };
+        adicionarEntidade(criarEntidade(ENTIDADE_ITEM, pos));
     }
 
     int pontuacao = 0;
-
-    int melhorPontuacao = lerMelhorPontuacao();
-
+    int melhorPontuacao = lerMelhorPontuacao(); // carrega o recorde salvo em placar.txt, se existir
     char mensagem[64] = "";
-
     float tempoMensagem = 0.0f;
 
     while (!WindowShouldClose()) {
 
         float vel = 250.0f * GetFrameTime();
+        if (IsKeyDown(KEY_RIGHT)) jogador->pos.x += vel;
+        if (IsKeyDown(KEY_LEFT))  jogador->pos.x -= vel;
+        if (IsKeyDown(KEY_UP))    jogador->pos.y -= vel;
+        if (IsKeyDown(KEY_DOWN))  jogador->pos.y += vel;
 
-        if (IsKeyDown(KEY_RIGHT))
-            jogador->pos.x += vel;
-
-        if (IsKeyDown(KEY_LEFT))
-            jogador->pos.x -= vel;
-
-        if (IsKeyDown(KEY_UP))
-            jogador->pos.y -= vel;
-
-        if (IsKeyDown(KEY_DOWN))
-            jogador->pos.y += vel;
-
-        /* -------------------------------------------------------
-         * COLISÕES
-         * ------------------------------------------------------- */
         for (int i = 1; i < totalEntidades; i++) {
-
             Entidade *e = vetorEntidades[i];
-
-            if (!colidiu(jogador, e))
-                continue;
+            if (!colidiu(jogador, e)) continue;
 
             if (e->tipo == ENTIDADE_ITEM) {
-
                 pontuacao += e->extra.valor;
-
                 removerEntidade(i);
-
                 i--;
-
             } else if (e->tipo == ENTIDADE_INIMIGO) {
-
                 jogador->vida -= e->extra.dano;
-
-                if (jogador->vida < 0)
-                    jogador->vida = 0;
+                if (jogador->vida < 0) jogador->vida = 0;
             }
         }
 
-        /* -------------------------------------------------------
-         * F5:
-         * Salva nome + pontuação no placar.txt
-         * ------------------------------------------------------- */
-        if (IsKeyPressed(KEY_F5)) {
-
-            salvarPlacarTexto(nomeJogador, pontuacao);
-
-            if (pontuacao > melhorPontuacao)
-                melhorPontuacao = pontuacao;
-
-            TextCopy(
-                mensagem,
-                "Placar salvo em placar.txt!"
-            );
-
+        if (IsKeyPressed(KEY_F5)) { // salva a pontuação no arquivo de texto
+            salvarPlacarTexto(pontuacao, nomeJogador); // Exercício 1: Passa o nome como argumento[cite: 1]
+            if (pontuacao > melhorPontuacao) melhorPontuacao = pontuacao;
+            TextCopy(mensagem, "Placar salvo em placar.txt!");
             tempoMensagem = 2.0f;
         }
 
-        /* -------------------------------------------------------
-         * F6:
-         * Salva o jogo inteiro no save.bin
-         * ------------------------------------------------------- */
-        if (IsKeyPressed(KEY_F6)) {
-
+        if (IsKeyPressed(KEY_F6)) { // salva o estado do jogo no arquivo binário
             bool ok = salvarJogoBinario();
-
-            TextCopy(
-                mensagem,
-                ok
-                    ? "Jogo salvo em save.bin!"
-                    : "Erro ao salvar save.bin!"
-            );
-
+            TextCopy(mensagem, ok ? "Jogo salvo em save.bin!" : "Erro ao salvar save.bin!");
             tempoMensagem = 2.0f;
         }
 
-        /* -------------------------------------------------------
-         * F9:
-         * Carrega o jogo do save.bin
-         * ------------------------------------------------------- */
-        if (IsKeyPressed(KEY_F9)) {
-
+        if (IsKeyPressed(KEY_F9)) { // carrega o estado do jogo do arquivo binário
             bool ok = carregarJogoBinario();
-
-            if (ok)
-                jogador = vetorEntidades[0];
-
-            TextCopy(
-                mensagem,
-                ok
-                    ? "Jogo carregado de save.bin!"
-                    : "Nenhum save.bin encontrado!"
-            );
-
+            if (ok) jogador = vetorEntidades[0]; // ponteiros antigos foram liberados: reaponta para o novo jogador
+            TextCopy(mensagem, ok ? "Jogo carregado de save.bin!" : "Nenhum save.bin encontrado!");
             tempoMensagem = 2.0f;
         }
-
-        /* -------------------------------------------------------
-         * DELETE:
-         * Exercício 2 - apaga o save.bin
-         * ------------------------------------------------------- */
-        if (IsKeyPressed(KEY_DELETE)) {
-
-            bool ok = apagarJogoSalvo();
-
-            TextCopy(
-                mensagem,
-                ok
-                    ? "Save apagado com sucesso!"
-                    : "Nenhum save encontrado!"
-            );
-
-            tempoMensagem = 2.0f;
+        
+        // Exercício 2: Apagar o arquivo save.bin ao pressionar a tecla DELETE[cite: 1]
+        if (IsKeyPressed(KEY_DELETE)) { 
+            if (remove(ARQUIVO_SAVE) == 0) { // A função remove devolve 0 em caso de sucesso[cite: 1]
+                TextCopy(mensagem, "Save apagado com sucesso!");
+            } else {
+                TextCopy(mensagem, "Nenhum save encontrado."); // Tratamento caso o arquivo não exista[cite: 1]
+            }
+            tempoMensagem = 2.0f; // Aproveita o tempo da mensagem[cite: 1]
         }
 
-        if (tempoMensagem > 0.0f)
-            tempoMensagem -= GetFrameTime();
+        if (tempoMensagem > 0.0f) tempoMensagem -= GetFrameTime();
 
-        /* -------------------------------------------------------
-         * DESENHO
-         * ------------------------------------------------------- */
         BeginDrawing();
+            ClearBackground(RAYWHITE);
 
-        ClearBackground(RAYWHITE);
+            for (int i = 0; i < totalEntidades; i++) {
+                desenharEntidade(vetorEntidades[i]);
+            }
 
-        for (int i = 0; i < totalEntidades; i++) {
-            desenharEntidade(vetorEntidades[i]);
-        }
+            DrawText(TextFormat("Vida: %d   Pontuacao: %d   Recorde: %d",
+                                 jogador->vida, pontuacao, melhorPontuacao), 10, 10, 22, DARKGRAY);
+            DrawText("F5 salva placar | F6 salva jogo | F9 carrega jogo | DELETE apaga save",
+                      10, 34, 18, GRAY);
+            DrawText("Setas movem o jogador | ESC sai", 10, ALTURA_JANELA - 25, 16, GRAY);
 
-        DrawText(
-            TextFormat(
-                "Jogador: %s   Vida: %d   Pontuacao: %d   Recorde: %d",
-                nomeJogador,
-                jogador->vida,
-                pontuacao,
-                melhorPontuacao
-            ),
-            10,
-            10,
-            20,
-            DARKGRAY
-        );
-
-        DrawText(
-            "F5 salva placar | F6 salva jogo | F9 carrega jogo | DELETE apaga save",
-            10,
-            34,
-            16,
-            GRAY
-        );
-
-        DrawText(
-            "Setas movem o jogador | ESC sai",
-            10,
-            ALTURA_JANELA - 25,
-            16,
-            GRAY
-        );
-
-        if (tempoMensagem > 0.0f) {
-
-            DrawText(
-                mensagem,
-                10,
-                58,
-                20,
-                DARKGREEN
-            );
-        }
+            if (tempoMensagem > 0.0f) {
+                DrawText(mensagem, 10, 58, 20, DARKGREEN);
+            }
 
         EndDrawing();
     }
@@ -492,6 +293,5 @@ int main(void) {
     liberarTodasEntidades();
 
     CloseWindow();
-
     return 0;
 }
